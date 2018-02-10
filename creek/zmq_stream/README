@@ -1,0 +1,32 @@
+Need to install libzmq and cppzmq
+
+libzmq : https://github.com/zeromq/libzmq
+cppzmq : https://github.com/zeromq/cppzmq
+
+perf : performance test
+
+1) cmake -DCMAKE_BUILD_TYPE=Debug ..
+2) cmake -DCMAKE_BUILD_TYPE=Release ..
+
+
+# Command Options:
+-h [ --help  ]                print help message
+-a [ --addr  ] arg            set network address
+-f [ --input_file  ] arg      set input file
+-t [ --rec_type  ] arg        recrod type 3 (x3), 4 (x4)
+-r [ --recs_per_bundle  ] arg recrods per bundle
+-s [ --ts_start  ] arg        start timestamp
+-d [ --ts_delta  ] arg        timestamp delta
+-i [ --interval  ] arg        bundle interval (us)
+
+e.g>
+
+./sender --addr "tcp://*:5563" --input_file /ssd/k2v-10M.txt --rec_type 3 --recs_per_bundle 20 --ts_start 0 --ts_delta 20 --interval 1000000
+
+# xzl
+#./sender -f /ssd/kv.txt -t 3 -r 10000 -s 10000000 -d 100000
+
+./sender -f /ssd/kv.txt -t 3 \
+--recs_per_bundle 500k \
+--ts_start 10m \
+--ts_delta 100k

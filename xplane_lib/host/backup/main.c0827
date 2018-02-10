@@ -1,0 +1,469 @@
+/*
+ * Copyright (c) 2016, Linaro Limited
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include <err.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>  // xzl
+#include <assert.h>  // xzl
+
+/* OP-TEE TEE client API (built by optee_client) */
+#include <tee_client_api.h>
+
+/* To the the UUID (found the the TA's h-file(s)) */
+#include <hello_world_ta.h>
+
+#include "xplane_api.h"
+
+#define RESET	"\033[0m"
+#define GREEN	"\033[32m"
+
+#define MAX_NUM_THREADS 8
+
+TEEC_UUID myuuid = STA_SELF_TEST_UUID;
+
+TEEC_UUID uuid = STA_SELF_TEST_UUID;
+TEEC_Context ctx;
+TEEC_Session sess;
+TEEC_Operation op;
+
+uint32_t err_origin;
+
+struct thread_arg {
+	int tid;
+	uint32_t max_concurrency;
+	int cmd;
+	int sel;
+};
+
+void op_single(int sel, int cmd)
+{
+	TEEC_Result res;
+	/*
+	 * Execute a function in the TA by invoking it, in this case
+	 * we're incrementing a number.
+	 *
+	 * The value of command ID part and how the parameters are
+	 * interpreted is part of the interface provided by the TA.
+	 */
+
+	/* Clear the TEEC_Operation struct */
+	memset(&op, 0, sizeof(op));
+
+	/*
+	 * Prepare the argument. Pass a value in the first parameter,
+	 * the remaining three parameters are unused.
+	 */
+	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT, TEEC_NONE,
+					 TEEC_NONE, TEEC_NONE);
+	op.params[0].value.a = sel;
+
+	res = TEEC_InvokeCommand(&sess, cmd, &op,
+				 &err_origin);
+
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
+			res, err_origin);
+
+	printf(GREEN "Execution time = %ums \n \x1B[0m" RESET, op.params[0].value.a);
+}
+
+static void *op_thread(void *arg)
+{
+	TEEC_Result res;
+	struct thread_arg *a = arg;
+
+	uint64_t out[2] = {0,};
+
+	memset(&op, 0, sizeof(op));
+
+/*	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT, TEEC_MEMREF_TEMP_OUTPUT,
+					 TEEC_NONE, TEEC_NONE);*/
+	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT, TEEC_MEMREF_TEMP_INOUT,
+					 TEEC_NONE, TEEC_NONE);
+	op.params[0].value.a = a->sel;
+	op.params[0].value.b = a->tid;
+	op.params[1].tmpref.buffer = out;
+	op.params[1].tmpref.size = sizeof(out);
+
+	printf(GREEN "size addr : %p\n", &op.params[1].tmpref.size);
+	printf(GREEN "buffer addr : %p\n", op.params[1].tmpref.buffer);
+
+	res = TEEC_InvokeCommand(&sess, a->cmd, &op,
+				 &err_origin);
+
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
+			res, err_origin);
+
+	/* hp: TEEEC_Parameter has 3 members (@tmpref @memref @value) */
+	printf(GREEN "Execution time = %ums \n \x1B[0m" RESET, op.params[0].value.a);
+	printf(GREEN "uarray size : %d\n", op.params[1].tmpref.size);
+
+	printf(GREEN "size addr : %p\n", &op.params[1].tmpref.size);
+	printf(GREEN "buffer addr : %p\n", op.params[1].tmpref.buffer);
+
+	printf(GREEN "uarry addr : %lx\n", *(uint64_t*) op.params[1].tmpref.buffer);
+//	printf(GREEN "uarray address : %lx\n", *(uint64_t*)op.params[1].tmpref.buffer);
+}
+
+void op_mt(int sel, int cmd)
+{
+	int num_threads = 1;
+	assert(num_threads <= MAX_NUM_THREADS);
+
+	pthread_t thr[num_threads];
+	struct thread_arg arg[num_threads];
+
+	size_t max_concurrency = 0;
+	size_t nt;
+	size_t n;
+
+	nt = num_threads;
+
+	memset(&op, 0, sizeof(op));
+	for (n = 0; n < nt; n++) {
+		arg[n].tid = n;
+		arg[n].cmd = cmd;
+		arg[n].sel = sel;
+		if (pthread_create(thr + n, NULL, op_thread, arg + n) != 0)
+			nt = n; /* break loop and start cleanup */
+	}
+
+	for (n = 0; n < nt; n++) {
+		if (pthread_join(thr[n], NULL) != 0) {
+			err(1, "join failed\n");
+		}
+	}
+
+	/* check the max concurrency */
+	for (n = 0 ; n < nt; n++) {
+		printf("concur = %u\n", arg[n].max_concurrency);
+		if (arg[n].max_concurrency > max_concurrency)
+			max_concurrency = arg[n].max_concurrency;
+	}
+	printf("max concurrency = %zu\n", max_concurrency);
+}
+
+/* Initialize a context connecting us to the TEE */
+void open_context()
+{
+	TEEC_Result res;
+	res = TEEC_InitializeContext(NULL, &ctx);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InitializeContext failed with code 0x%x", res);
+}
+
+void open_session()
+{
+	TEEC_Result res;
+	res = TEEC_OpenSession(&ctx, &sess, &uuid,
+			       TEEC_LOGIN_PUBLIC, NULL, NULL, &err_origin);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x",
+			res, err_origin);
+}
+
+void close_session()
+{
+	TEEC_CloseSession(&sess);
+}
+
+void close_context()
+{
+	TEEC_FinalizeContext(&ctx);
+}
+
+
+static void *thread_func(void *arg)
+{
+	TEEC_Result res;
+	uint32_t error_orig;
+	TEEC_Session sess;
+	TEEC_Operation op;
+	struct thread_arg *a = arg;
+
+	/* each thread opens a session */
+	res = TEEC_OpenSession(&ctx, &sess, &myuuid, TEEC_LOGIN_PUBLIC,
+			NULL, NULL, &error_orig);
+
+	if (res != TEEC_SUCCESS)
+			return NULL;
+
+	memset(&op, 0, sizeof(op));
+	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT,
+			TEEC_VALUE_OUTPUT,
+			TEEC_NONE,
+			TEEC_NONE);
+	op.params[0].value.a = 42;
+
+	res = TEEC_InvokeCommand(&sess,
+				a->cmd,
+				&op,
+				 &error_orig);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
+			res, error_orig);
+
+	printf("num_rounds = %u\n", op.params[1].value.a);
+	a->max_concurrency = op.params[1].value.b;
+//	printf("concur = %u\n", a->max_concurrency);
+
+	TEEC_CloseSession(&sess);
+
+	return NULL;
+}
+
+
+void test_mt(int cmd, size_t num_threads)
+{
+	TEEC_Result res;
+
+	assert(num_threads <= MAX_NUM_THREADS);
+
+	pthread_t thr[num_threads];
+	struct thread_arg arg[num_threads];
+
+	size_t max_concurrency = 0;
+	size_t nt;
+	size_t n;
+
+	res = TEEC_InitializeContext(NULL, &ctx);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InitializeContext failed with code 0x%x", res);
+
+	/* ######################## hj */
+
+	TEEC_Session sess;
+	uint32_t error_orig;
+	TEEC_Operation op;
+
+	printf("start merge\n");
+	/* each thread opens a session */
+	res = TEEC_OpenSession(&ctx, &sess, &myuuid, TEEC_LOGIN_PUBLIC,
+			NULL, NULL, &error_orig);
+
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x",
+			res, error_orig);
+
+	memset(&op, 0, sizeof(op));
+	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT,
+			TEEC_VALUE_OUTPUT,
+			TEEC_NONE,
+			TEEC_NONE);
+
+	res = TEEC_InvokeCommand(&sess,
+				4,		// hj change command
+				&op,
+				 &error_orig);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
+			res, error_orig);
+
+	TEEC_CloseSession(&sess);
+	/* ###################### */
+
+
+	nt = num_threads;
+
+	for (n = 0; n < nt; n++) {
+		arg[n].cmd = cmd;
+		if (pthread_create(thr + n, NULL, thread_func, arg + n) != 0)
+			nt = n; /* break loop and start cleanup */
+	}
+
+	for (n = 0; n < nt; n++) {
+		if (pthread_join(thr[n], NULL) != 0) {
+			err(1, "join failed\n");
+		}
+	}
+
+	/* check the max concurrency */
+	for (n = 0 ; n < nt; n++) {
+		printf("concur = %u\n", arg[n].max_concurrency);
+		if (arg[n].max_concurrency > max_concurrency)
+			max_concurrency = arg[n].max_concurrency;
+	}
+	printf("max concurrency = %zu\n", max_concurrency);
+
+
+	TEEC_CloseSession(&sess);
+
+	TEEC_FinalizeContext(&ctx);
+}
+
+/*
+int main(int argc, char *argv[])
+{
+}
+*/
+
+int main(int argc, char *argv[])
+{
+	int sel = 1;
+	x_addr uid = 0;
+	open_context();
+	open_session();
+	op_single(2, 3 /* Change page map */);
+
+	printf("choose operation\n");
+	printf("0 : geneerate input\n");
+	printf("1 : sort\n");
+	printf("2 : m_sort\n");
+	printf("3 : merge\n");
+	printf("4 : filter\n");
+
+	while(1){
+		printf("?");
+		scanf("%d", &sel);
+//		op_single(sel, 2/* CMD_SELF_TESTS -- set up mapping */);
+		switch(sel){
+			case X_CMD_CREATE_RAND :
+				uid = create_rand_uarray();
+				printf("return uid : %lx\n", uid);
+				break;
+			case X_CMD_CREATE_UA :
+				create_uarray();
+				break;
+			case X_CMD_RETIRE_UA :
+//				retire(ua);
+				break;
+			case X_CMD_SORT :
+//				sort(dest, src);
+				break;
+			case X_CMD_MERGE :
+//				merge(dest, src1, src2);
+				break;
+//			case X_CMD_JOIN :
+			default :
+				return 0;
+			break;
+/*
+				op_mt(sel, 2);
+				break;
+			case 2 :
+			case 3 :
+				op_mt(sel, 2);
+				break;
+			case 4:
+				op_mt(sel, 2);
+				break;
+			dafault :
+				return 0;
+				break;
+*/
+		}
+	}
+
+	
+//	test_mt(2 /* memset */, 4 /* # of threads */);
+//	test_single(3 /* CMD_SELF_TESTS -- set up mapping */);
+
+	close_session();
+	close_context();
+}
+
+int main_orig(int argc, char *argv[])
+{
+	TEEC_Result res;
+	TEEC_Context ctx;
+	TEEC_Session sess;
+	TEEC_Operation op;
+	TEEC_UUID uuid = TA_HELLO_WORLD_UUID;
+	uint32_t err_origin;
+
+	TEEC_SharedMemory shm;  // xzl
+
+	/* Initialize a context connecting us to the TEE */
+	res = TEEC_InitializeContext(NULL, &ctx);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InitializeContext failed with code 0x%x", res);
+
+	memset(&shm, 0, sizeof(shm));
+	shm.size = 20;  // xzl: arbitrary size
+	shm.flags = TEEC_MEM_INPUT | TEEC_MEM_OUTPUT;
+	if (TEEC_AllocateSharedMemory(&ctx, &shm) != TEEC_SUCCESS) {
+		errx(1, "xzl: failed to alloc shared mem\n");
+	} else
+		printf("xzl: done allocing shared mem. buf is %p\n", shm.buffer);
+
+	/*
+	 * Open a session to the "hello world" TA, the TA will print "hello
+	 * world!" in the log when the session is created.
+	 */
+	res = TEEC_OpenSession(&ctx, &sess, &uuid,
+			       TEEC_LOGIN_PUBLIC, NULL, NULL, &err_origin);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x",
+			res, err_origin);
+
+	/*
+	 * Execute a function in the TA by invoking it, in this case
+	 * we're incrementing a number.
+	 *
+	 * The value of command ID part and how the parameters are
+	 * interpreted is part of the interface provided by the TA.
+	 */
+
+	/* Clear the TEEC_Operation struct */
+	memset(&op, 0, sizeof(op));
+
+	/*
+	 * Prepare the argument. Pass a value in the first parameter,
+	 * the remaining three parameters are unused.
+	 */
+	op.paramTypes = TEEC_PARAM_TYPES(TEEC_VALUE_INOUT, TEEC_NONE,
+					 TEEC_NONE, TEEC_NONE);
+	op.params[0].value.a = 42;
+
+	/*
+	 * TA_HELLO_WORLD_CMD_INC_VALUE is the actual function in the TA to be
+	 * called.
+	 */
+	printf("Invoking TA to increment %d\n", op.params[0].value.a);
+	res = TEEC_InvokeCommand(&sess, TA_HELLO_WORLD_CMD_INC_VALUE, &op,
+				 &err_origin);
+	if (res != TEEC_SUCCESS)
+		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
+			res, err_origin);
+	printf("TA incremented value to %d\n", op.params[0].value.a);
+
+	/*
+	 * We're done with the TA, close the session and
+	 * destroy the context.
+	 *
+	 * The TA will print "Goodbye!" in the log when the
+	 * session is closed.
+	 */
+
+	TEEC_CloseSession(&sess);
+
+	TEEC_FinalizeContext(&ctx);
+
+	return 0;
+}

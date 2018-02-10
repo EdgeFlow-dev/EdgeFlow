@@ -1,0 +1,10 @@
+*.swp
+*.old
+cscope.*
+out
+.cproject
+.project
+.settings/
+GPATH
+GRTAGS
+GTAGS

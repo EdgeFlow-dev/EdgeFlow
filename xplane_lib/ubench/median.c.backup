@@ -1,0 +1,266 @@
+#include <err.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include <unistd.h>
+#include <pthread.h>
+
+#include <assert.h>
+
+#include "xplane_lib.h"
+#include "log.h"// xzl
+
+#define MAX_NUM_THREADS 8
+#define NITEMS			2 * 1024 * 1024
+
+
+x_addr global_src;
+
+#if 0
+/* xzl */
+static void dump_nsbuf(simd_t const * nsbuf, unsigned slen,
+		const char * tag = "", unsigned rlen = 3)
+{
+
+	xzl_bug_on(!nsbuf);
+
+	EE("%s", tag);
+	for (unsigned i = 0; i < slen; i++) {
+		printf("%08x ", *((simd_t *) nsbuf + i));
+		if (i % rlen == rlen - 1)
+			printf("\t");
+		if ((i % (3 * rlen)) + 1 == 3 * rlen)
+			printf("\n");
+	}
+	printf("\n");
+
+}
+#endif
+
+static void test_med_bykey(void){
+	x_addr src;
+	x_addr *sorted_src;
+	x_addr *dests;
+	simd_t *ns_dest;
+	
+	uint32_t n_outputs = 1;
+	uint32_t len = 60;
+	uint32_t i, j;
+	int32_t ret;
+
+	const int source_len = 2 * 1024 * 1024;
+
+	const idx_t tspos = 0, keypos = 1, vpos = 2, reclen = 3;
+
+	printf("test sumcountp perkey \n");
+
+/********** pseudo source *****************/
+	ret = pseudo_source(&src, global_src,
+				0/*src_offset*/,
+				source_len,
+				0 /*ts_start */,
+				1 /* ts_delta */, tspos, reclen);
+
+	xzl_bug_on(ret < 0);
+	xzl_bug_on(!src);
+
+/********** sorted source *****************/
+	sorted_src = (x_addr *) malloc (sizeof(x_addr) * n_outputs);
+	ret = sort(sorted_src, n_outputs, src, keypos, reclen);
+
+	xzl_bug_on(ret < 0);
+	xzl_bug_on(!sorted_src);
+
+	ret = retire_uarray(src);
+	xzl_bug_on(ret < 0);
+
+	dests = (x_addr *) malloc (sizeof(x_addr) * 4);
+	ns_dest = (simd_t *) malloc (sizeof(simd_t) * len);
+	
+	ret = med_bykey(dests, 
+					1, sorted_src[0], 
+					keypos, vpos, reclen);
+
+	xzl_bug_on(ret < 0);
+	xzl_bug_on(!dests);
+
+	uarray_to_nsbuf(ns_dest, sorted_src[0], &len);
+	for(j = 0; j < len; j += 3){
+		printf("%6d %6d %6d\n", ns_dest[j], ns_dest[j+1], ns_dest[j+2]);
+	}
+	printf("\n");
+
+	ret = retire_uarray(*sorted_src);
+	xzl_bug_on(ret < 0);
+
+	for(i = 0 ; i < 1; i++){
+		printf("dests[%d] = %lx\n", i, dests[i]);
+		uarray_to_nsbuf(ns_dest, dests[i], &len);
+		for(j = 0; j < len; j += 3){
+			printf("%6d %6d %6d\n", ns_dest[j], ns_dest[j+1], ns_dest[j+2]);
+		}
+		printf("\n");
+	}
+
+}
+
+struct thread_arg {
+	uint8_t id;
+	void (*test_func)(void);
+};
+
+void *x_run(void *arg){
+	struct thread_arg *t_arg = (struct thread_arg *)arg;
+	void (*test)(void) = t_arg->test_func;
+	uint32_t i;
+
+	for(i = 0;i < 10000; i++){
+		test();
+		if(t_arg->id == 0) {
+//			show_sbuff_resource();
+			; /* nothing */
+		}
+//		usleep(100 * 1000);
+	}
+
+	return NULL;
+}
+
+#if 0
+void x_run(void (*test_func)(void)){
+	uint32_t i;
+	for(i = 0;i < 10000; i++){
+		test_func();
+		usleep(10);
+	}
+}
+#endif
+
+void mt_x_run(void (*pfunc)(void), size_t num_threads){
+	pthread_t thr[num_threads];
+	struct thread_arg arg[num_threads];
+	size_t n;
+
+	for(n = 0; n < num_threads; n++){
+		arg[n].id = n;
+		arg[n].test_func = pfunc;
+		if(pthread_create(thr + n, NULL, x_run, arg + n) != 0)
+			err(1, "create failn\n");
+	}
+
+	for(n = 0; n < num_threads; n++){
+		if(pthread_join(thr[n], NULL) != 0)
+			err(1, "join failed\n");
+	}
+}
+
+
+int main(int argc, char *argv[])
+{
+	uint32_t *nsbuf;
+	uint32_t cnt = 0;
+
+	FILE *fp;
+
+	/* randomly generated input which has 1000K items (composed of 3 elements) */
+	fp = fopen("input_x3.txt","r");	/* input file for 3 elements in item */
+	if (!fp){
+		printf("file open failed errno : %p\n", fp);
+		return 0;
+	}
+#if 1
+	nsbuf = (uint32_t *) malloc (sizeof(uint32_t) * NITEMS * ELES_PER_ITEM);
+	printf("read file ... \n");
+
+	while(cnt < NITEMS){
+//		if (fscanf(fp, "%d\n", nsbuf + cnt++) == EOF)
+		if (fscanf(fp, "%d %d %d\n", nsbuf + (cnt * ELES_PER_ITEM), 
+					nsbuf + (cnt * ELES_PER_ITEM + 1),
+					nsbuf + (cnt * ELES_PER_ITEM + 2)) == EOF)
+
+			break;
+		cnt++;
+	}
+	printf("nsbuf : %p, cnt : %d\n", (void *)nsbuf, cnt);
+	fclose(fp);
+#endif
+
+	global_src = create_uarray_nsbuf(nsbuf, NITEMS * ELES_PER_ITEM /* sizeof(int32_t) */);
+
+/**************************************************************/
+
+	show_sbuff_resource();
+	test_med_bykey();
+
+#if 0
+	int ncores = 1;
+	if (argc == 2)
+		ncores = atoi(argv[1]);
+	printf("to run mt_x_run() ncores =%d\n", ncores);
+	mt_x_run(test_sumcount_perkey, ncores);
+#endif
+
+}
+
+#include <signal.h>
+
+/*
+ * abort handling.
+ * by xzl
+ */
+
+static int is_xplane_init = 0; /* XXX race condition? */
+
+static void abort_handler(int i)
+{
+	if (is_xplane_init) {
+		EE("cleaning up....");
+		kill_map();
+		EE("mapped killed");
+		close_context();
+		EE("context closed");
+		is_xplane_init = 0;
+	}
+
+	exit(1);
+}
+
+__attribute__((constructor))
+void xplane_init(void)
+{
+	if (signal(SIGABRT, abort_handler) == SIG_ERR) {
+		fprintf(stderr, "Couldn't set signal handler\n");
+		exit(1);
+	}
+
+	if (signal(SIGINT, abort_handler) == SIG_ERR) {
+		fprintf(stderr, "Couldn't set signal handler\n");
+		exit(1);
+	}
+
+	open_context();
+	populate_map();
+
+	EE("init OK");
+
+	is_xplane_init = 1;
+}
+
+/* will be called when main() ends or exit() called */
+__attribute__((destructor))
+void xplane_fini(void)
+{
+	if (is_xplane_init) {
+		EE("cleaning up....");
+		kill_map();
+		EE("mapped killed");
+		close_context();
+		EE("context closed");
+		is_xplane_init = 0;
+	}
+}
+/*
+ * end of abort handling
+ */
+

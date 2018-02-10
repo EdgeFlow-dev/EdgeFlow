@@ -1,0 +1,61 @@
+Move all primitives to the normal world making it works.
+
+
+######################################
+# build instructions (xzl)
+######################################
+
+export ROOTDIR=${PWD}
+export ARCH=avx2 # knl, arm...
+
+# config debug
+cd ${ROOTDIR}/cmake-build-debug
+/usr/bin/cmake \
+-DCMAKE_BUILD_TYPE=Debug \
+-DCMAKE_ENV=${ARCH} \
+${ROOTDIR}
+
+# config release
+cd ${ROOTDIR}/cmake-build-release
+/usr/bin/cmake \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_ENV=${ARCH} \
+${ROOTDIR}
+
+# build Release
+/usr/bin/cmake \
+--build ${ROOTDIR}/cmake-build-release \
+--target all -- \
+-j `nproc`
+
+# Debug
+/usr/bin/cmake \
+--build ${ROOTDIR}/cmake-build-debug \
+--target all -- \
+-j `nproc`
+######################################
+
+@ configh.h
+set the archtecture (e.g., #define ARM_NEON or #define X86) for compilation.
+
+command to build lib
+@ X86
+1) #define X86 in "config.h"
+2) cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+@ ARM_NEON
+1) #define ARM_NEON in "config.h"
+2) cmake -DCMAKE_ENV=arm -DCMAKE_BUILD_TYPE=Debug ..
+
+
+
+
+command to build uBench
+@ X86
+1) cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+@ ARM_NEON
+1) cmake -DCMAKE_ENV=arm -DCMAKE_BUILD_TYPE=Debug ..
+
+@ X86 AVX2
+1) cmake -DCMAKE_ENV=avx2 -DCMAKE_BUILD_TYPE=Debug ..

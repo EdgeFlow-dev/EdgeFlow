@@ -1,0 +1,21 @@
+/* Author: Hongyu Miao @ Purdue ECE 
+ * Date: Nov 9th, 2017 
+ * Description: This file provides Bitonic sort/merge core functions for AVX-512 
+ * */
+
+bitonic_sort_merge_core.h
+ 	-- Provides bitonic sort/merge core functions for key
+	-- AVX-512 intrinsics level
+
+x2_bitonic_sort_merge_core.h
+	-- Provides bitonic sort/merge core functions for <key, pointer>
+	-- AVX-512 intrinsics level
+
+x2_sort_merge.h
+	-- Provides sort/merge functions to for <key, pointer>
+	-- c/c++ level
+	-- These interfaces are very powerful becaue they can sort/merge any kinds of records by any item in a record. You only need to specify the key position.
+
+xplan_sort_merge.h
+	-- Provides sort/merge functions for xplane interfaces
+	-- c/c++ level
